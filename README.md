@@ -1,214 +1,205 @@
-# Tinypool - the node.js worker pool 🧵
+# Tinypool Agent Runtime 🧵🤖
 
-> Piscina: A fast, efficient Node.js Worker Thread Pool implementation
+An experimental fork of [tinylibs/tinypool](https://github.com/tinylibs/tinypool) focused on running AI-agent workloads, isolated tools and concurrent tasks in Node.js.
 
-Tinypool is a fork of piscina. What we try to achieve in this library, is to eliminate some dependencies and features that our target users don't need (currently, our main user will be Vitest). Tinypool's install size (38KB) can then be smaller than Piscina's install size (6MB when Tinypool was created, Piscina has since reduced it's size to ~800KB). If you need features like [utilization](https://github.com/piscinajs/piscina#property-utilization-readonly) or OS-specific thread priority setting, [Piscina](https://github.com/piscinajs/piscina) is a better choice for you. We think that Piscina is an amazing library, and we may try to upstream some of the dependencies optimization in this fork.
+The original Tinypool worker-pool API stays available. This fork adds a higher-level agent runtime on top of it instead of replacing the worker engine.
 
-- ✅ Smaller install size, 38KB
-- ✅ Minimal
-- ✅ No dependencies
-- ✅ Physical cores instead of Logical cores with [physical-cpu-count](https://www.npmjs.com/package/physical-cpu-count)
-- ✅ Supports `worker_threads` and `child_process`
-- ❌ No utilization
-- ❌ No OS-specific thread priority setting
+## Why this fork?
 
-- Written in TypeScript, and ESM support only. For Node.js 18.x and higher.
+AI agents need more than parallel execution. They also need execution identity, capability boundaries, tool-call limits, cancellation, lifecycle events and a clean path toward isolated tool execution.
 
-_In case you need more tiny libraries like tinypool or tinyspy, please consider submitting an [RFC](https://github.com/tinylibs/rfcs)_
+This fork keeps Tinypool's small worker runtime and adds those primitives incrementally.
 
-## Example
+### Current agent features
 
-### Using `node:worker_threads`
+- ✅ `AgentPool` built on top of Tinypool
+- ✅ `worker_threads` and `child_process` runtimes
+- ✅ Agent identity and execution envelopes
+- ✅ Capability-based tool permissions
+- ✅ `ToolRegistry`
+- ✅ Per-agent tool-call limits
+- ✅ Execution timeouts and cancellation
+- ✅ Agent lifecycle events (`agent:start`, `agent:finish`, `agent:error`)
+- ✅ Typed `defineAgent()` helper
+- ✅ Existing Tinypool API remains available
+- 🚧 Main ↔ worker tool RPC over `TinypoolChannel`
+- 🚧 Persistent agent sessions
+- 🚧 Remote / container runtimes
+- 🚧 Agent-to-agent messaging and scheduling
 
-#### Basic usage
+## Agent runtime
+
+Import the new runtime from the `tinypool/agent` subpath.
+
+```ts
+import { AgentPool } from 'tinypool/agent'
+
+const agents = new AgentPool({
+  pool: {
+    maxThreads: 4,
+  },
+  capabilities: ['repo.read'],
+  limits: {
+    timeout: 30_000,
+    maxToolCalls: 20,
+  },
+})
+```
+
+### Register tools
+
+Tools can declare the capabilities required to invoke them.
+
+```ts
+agents.tools.register({
+  name: 'read-file',
+  capabilities: ['filesystem.read'],
+  async execute({ path }) {
+    return readFile(path, 'utf8')
+  },
+})
+```
+
+Create an agent context with explicit permissions:
+
+```ts
+const context = agents.createContext({
+  agentId: 'researcher',
+  capabilities: ['filesystem.read'],
+})
+
+const contents = await context.tool('read-file', {
+  path: './README.md',
+})
+```
+
+If an agent does not have the required capability, the runtime throws `AgentPermissionError` before the tool executes.
+
+### Run an agent in the worker pool
+
+Agent jobs are wrapped in a serializable execution envelope containing the input plus agent metadata.
+
+```ts
+const result = await agents.run(
+  { prompt: 'Analyze this repository' },
+  {
+    agentId: 'repo-researcher',
+    filename: new URL('./research-agent.mjs', import.meta.url).href,
+    capabilities: ['repo.read'],
+    limits: {
+      timeout: 60_000,
+      maxToolCalls: 30,
+    },
+  }
+)
+```
+
+Worker:
+
+```ts
+import { defineAgent } from 'tinypool/agent'
+
+export default defineAgent(async ({ input, agent }) => {
+  return {
+    agentId: agent.id,
+    prompt: input.prompt,
+    capabilities: agent.capabilities,
+  }
+})
+```
+
+The envelope is intentionally model-provider agnostic. OpenAI, Anthropic, local models or custom orchestration code can live inside the worker without coupling the pool to one SDK.
+
+### Lifecycle events
+
+```ts
+agents.on('agent:start', ({ agent }) => {
+  console.log('started', agent.id)
+})
+
+agents.on('agent:finish', ({ agent }) => {
+  console.log('finished', agent.id)
+})
+
+agents.on('agent:error', ({ agent, error }) => {
+  console.error('failed', agent.id, error)
+})
+```
+
+## Architecture direction
+
+```text
+AgentPool
+├── Tinypool worker scheduler
+├── Agent execution envelopes
+├── ToolRegistry
+├── Capability checks
+├── Execution limits
+├── Lifecycle events
+└── TinypoolChannel
+    └── future tool RPC / agent messaging
+```
+
+The important design rule is that the worker-pool core stays useful independently of the agent layer. Agent-specific functionality is exposed through `tinypool/agent`.
+
+## Original Tinypool API
+
+The original API is still available:
 
 ```js
-// main.mjs
 import Tinypool from 'tinypool'
 
 const pool = new Tinypool({
   filename: new URL('./worker.mjs', import.meta.url).href,
 })
-const result = await pool.run({ a: 4, b: 6 })
-console.log(result) // Prints 10
 
-// Make sure to destroy pool once it's not needed anymore
-// This terminates all pool's idle workers
+const result = await pool.run({ a: 4, b: 6 })
+console.log(result) // 10
+
 await pool.destroy()
 ```
 
-```js
-// worker.mjs
-export default ({ a, b }) => {
-  return a + b
-}
-```
-
-#### Main thread <-> worker thread communication
-
-<details>
-  <summary>See code</summary>
+Worker:
 
 ```js
-// main.mjs
-import Tinypool from 'tinypool'
-import { MessageChannel } from 'node:worker_threads'
-
-const pool = new Tinypool({
-  filename: new URL('./worker.mjs', import.meta.url).href,
-})
-const { port1, port2 } = new MessageChannel()
-const promise = pool.run({ port: port1 }, { transferList: [port1] })
-
-port2.on('message', (message) => console.log('Main thread received:', message))
-setTimeout(() => port2.postMessage('Hello from main thread!'), 1000)
-
-await promise
-
-port1.close()
-port2.close()
+export default ({ a, b }) => a + b
 ```
 
-```js
-// worker.mjs
-export default ({ port }) => {
-  return new Promise((resolve) => {
-    port.on('message', (message) => {
-      console.log('Worker received:', message)
+Tinypool supports both `worker_threads` and `child_process` and provides communication primitives between the parent process and workers.
 
-      port.postMessage('Hello from worker thread!')
-      resolve()
-    })
-  })
-}
+## Development
+
+```bash
+pnpm install
+pnpm test
+pnpm typecheck
+pnpm lint
+pnpm build
 ```
 
-</details>
+Node.js requirements follow the current upstream package configuration: Node.js 20 or newer supported ranges.
 
-### Using `node:child_process`
+## Fork policy
 
-#### Basic usage
+This repository is intentionally allowed to diverge from upstream Tinypool as the agent runtime evolves. Upstream fixes and improvements can still be incorporated when useful, but agent-specific features are not being developed with the expectation that they will be merged into `tinylibs/tinypool`.
 
-<details>
-  <summary>See code</summary>
+## Roadmap
 
-```js
-// main.mjs
-import Tinypool from 'tinypool'
+The next useful milestones are:
 
-const pool = new Tinypool({
-  runtime: 'child_process',
-  filename: new URL('./worker.mjs', import.meta.url).href,
-})
-const result = await pool.run({ a: 4, b: 6 })
-console.log(result) // Prints 10
-```
-
-```js
-// worker.mjs
-export default ({ a, b }) => {
-  return a + b
-}
-```
-
-</details>
-
-#### Main process <-> worker process communication
-
-<details>
-  <summary>See code</summary>
-
-```js
-// main.mjs
-import Tinypool from 'tinypool'
-
-const pool = new Tinypool({
-  runtime: 'child_process',
-  filename: new URL('./worker.mjs', import.meta.url).href,
-})
-
-const messages = []
-const listeners = []
-const channel = {
-  onMessage: (listener) => listeners.push(listener),
-  postMessage: (message) => messages.push(message),
-}
-
-const promise = pool.run({}, { channel })
-
-// Send message to worker
-setTimeout(
-  () => listeners.forEach((listener) => listener('Hello from main process')),
-  1000
-)
-
-// Wait for task to finish
-await promise
-
-console.log(messages)
-// [{ received: 'Hello from main process', response: 'Hello from worker' }]
-```
-
-```js
-// worker.mjs
-export default async function run() {
-  return new Promise((resolve) => {
-    process.on('message', (message) => {
-      // Ignore Tinypool's internal messages
-      if (message?.__tinypool_worker_message__) return
-
-      process.send({ received: message, response: 'Hello from worker' })
-      resolve()
-    })
-  })
-}
-```
-
-</details>
-
-## API
-
-We have a similar API to Piscina, so for more information, you can read Piscina's detailed [documentation](https://github.com/piscinajs/piscina#piscina---the-nodejs-worker-pool) and apply the same techniques here.
-
-### Tinypool specific APIs
-
-#### Pool constructor options
-
-- `isolateWorkers`: Disabled by default. Always starts with a fresh worker when running tasks to isolate the environment.
-- `terminateTimeout`: Disabled by default. If terminating a worker takes `terminateTimeout` amount of milliseconds to execute, an error is raised.
-- `maxMemoryLimitBeforeRecycle`: Disabled by default. When defined, the worker's heap memory usage is compared against this value after task has been finished. If the current memory usage exceeds this limit, worker is terminated and a new one is started to take its place. This option is useful when your tasks leak memory and you don't want to enable `isolateWorkers` option.
-- `runtime`: Used to pick worker runtime. Default value is `worker_threads`.
-  - `worker_threads`: Runs workers in [`node:worker_threads`](https://nodejs.org/api/worker_threads.html). For `main thread <-> worker thread` communication you can use [`MessagePort`](https://nodejs.org/api/worker_threads.html#class-messageport) in the `pool.run()` method's [`transferList` option](https://nodejs.org/api/worker_threads.html#portpostmessagevalue-transferlist). See [example](#main-thread---worker-thread-communication).
-  - `child_process`: Runs workers in [`node:child_process`](https://nodejs.org/api/child_process.html). For `main thread <-> worker process` communication you can use `TinypoolChannel` in the `pool.run()` method's `channel` option. For filtering out the Tinypool's internal messages see `TinypoolWorkerMessage`. See [example](#main-process---worker-process-communication).
-- `teardown`: name of the function in file that should be called before worker is terminated. Must be named exported.
-- `serialization`: Specify the kind of serialization used for the `child_process` runtime. Possible values are `'json'` and `'advanced'`. See Node.js [Advanced serialization](https://nodejs.org/docs/latest/api/child_process.html#advanced-serialization) for more details.
-
-#### Pool methods
-
-- `cancelPendingTasks()`: Gracefully cancels all pending tasks without stopping or interfering with on-going tasks. This method is useful when your tasks may have side effects and should not be terminated forcefully during task execution. If your tasks don't have any side effects you may want to use [`{ signal }`](https://github.com/piscinajs/piscina#cancelable-tasks) option for forcefully terminating all tasks, including the on-going ones, instead.
-- `recycleWorkers(options)`: Waits for all current tasks to finish and re-creates all workers. Can be used to force isolation imperatively even when `isolateWorkers` is disabled. Accepts `{ runtime }` option as argument.
-
-#### Exports
-
-- `workerId`: Each worker now has an id ( <= `maxThreads`) that can be imported from `tinypool` in the worker itself (or `process.__tinypool_state__.workerId`).
-
-## Authors
-
-| <a href="https://github.com/Aslemammad"> <img width='150' src="https://avatars.githubusercontent.com/u/37929992?v=4" /><br> Mohammad Bagher </a> |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ |
-
-## Sponsors
-
-Your sponsorship can make a huge difference in continuing our work in open source!
-
-<p align="center">
-  <a href="https://cdn.jsdelivr.net/gh/aslemammad/static/sponsors.svg">
-    <img src='https://cdn.jsdelivr.net/gh/aslemammad/static/sponsors.svg'/>
-  </a>
-</p>
+1. Tool RPC over the existing `TinypoolChannel`, so workers can request privileged tools from the parent process without serializing executable functions.
+2. Persistent agent sessions with scoped state.
+3. Per-tool timeout, concurrency and audit hooks.
+4. Stronger isolation policies for `child_process` agents.
+5. Optional remote/container runtime adapters.
+6. Agent scheduling, priorities and sub-agent orchestration.
 
 ## Credits
 
-[The Vitest team](https://vitest.dev/) for giving me the chance of creating and maintaing this project for vitest.
+This project is a personal fork of [Tinypool](https://github.com/tinylibs/tinypool), which itself originated as a smaller fork of [Piscina](https://github.com/piscinajs/piscina).
 
-[Piscina](https://github.com/piscinajs/piscina), because Tinypool is not more than a friendly fork of piscina.
+The original Tinypool project and its contributors remain the foundation of the worker-pool implementation.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
