@@ -3,25 +3,41 @@
   "type": "module",
   "version": "2.1.2",
   "packageManager": "pnpm@9.0.6",
-  "description": "A minimal and tiny Node.js Worker Thread Pool implementation, a fork of piscina, but with fewer features",
+  "description": "A lightweight Node.js worker pool with experimental runtime primitives for AI agents, tools and isolated workloads",
   "license": "MIT",
-  "homepage": "https://github.com/tinylibs/tinypool#readme",
+  "homepage": "https://github.com/edujbarrios/tinypool#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tinylibs/tinypool.git"
+    "url": "https://github.com/edujbarrios/tinypool.git"
   },
   "bugs": {
-    "url": "https://github.com/tinylibs/tinypool/issues"
+    "url": "https://github.com/edujbarrios/tinypool/issues"
   },
   "keywords": [
-    "fast",
+    "ai",
+    "ai agents",
+    "agent",
+    "agent runtime",
+    "agent tools",
+    "tool calling",
+    "tool runtime",
     "worker threads",
-    "thread pool"
+    "worker pool",
+    "child process",
+    "concurrency",
+    "parallelism",
+    "isolation",
+    "nodejs",
+    "typescript"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "default": "./dist/agent.js"
     },
     "./package.json": "./package.json"
   },
