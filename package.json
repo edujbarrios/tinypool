@@ -3,7 +3,7 @@
   "type": "module",
   "version": "2.1.2",
   "packageManager": "pnpm@9.0.6",
-  "description": "A tiny Node.js worker pool with experimental primitives for AI agents, tools and isolated workloads",
+  "description": "A lightweight Node.js worker pool with experimental runtime primitives for AI agents, tools and isolated workloads",
   "license": "MIT",
   "homepage": "https://github.com/edujbarrios/tinypool#readme",
   "repository": {
@@ -14,14 +14,21 @@
     "url": "https://github.com/edujbarrios/tinypool/issues"
   },
   "keywords": [
+    "ai",
     "ai agents",
+    "agent",
     "agent runtime",
+    "agent tools",
     "tool calling",
+    "tool runtime",
     "worker threads",
     "worker pool",
     "child process",
     "concurrency",
-    "nodejs"
+    "parallelism",
+    "isolation",
+    "nodejs",
+    "typescript"
   ],
   "exports": {
     ".": {
