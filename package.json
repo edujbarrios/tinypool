@@ -5,13 +5,13 @@
   "packageManager": "pnpm@9.0.6",
   "description": "A minimal and tiny Node.js Worker Thread Pool implementation, a fork of piscina, but with fewer features",
   "license": "MIT",
-  "homepage": "https://github.com/tinylibs/tinypool#readme",
+  "homepage": "https://github.com/edujbarrios/tinypool#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tinylibs/tinypool.git"
+    "url": "https://github.com/edujbarrios/tinypool.git"
   },
   "bugs": {
-    "url": "https://github.com/tinylibs/tinypool/issues"
+    "url": "https://github.com/edujbarrios/tinypool/issues"
   },
   "keywords": [
     "fast",
@@ -22,6 +22,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "default": "./dist/agent.js"
     },
     "./package.json": "./package.json"
   },
